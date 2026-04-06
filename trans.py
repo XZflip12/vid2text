@@ -1,14 +1,16 @@
+import argparse
+import ctypes
 import os
 import sys
-import ctypes
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, List, Literal, Optional, Tuple, cast
 
 from faster_whisper import WhisperModel
 from yt_dlp import YoutubeDL
 
 MODEL_SIZE = "medium"
-TRANSCRIPT_FILE = "transcript.txt"
+TRANSCRIPT_FILE = "transcript_old.txt"
 TEMP_AUDIO_TEMPLATE = "temp_audio.%(ext)s"
 TEMP_AUDIO_FILE = "temp_audio.mp3"
 DEFAULT_LANGUAGE = "ru"
@@ -27,6 +29,19 @@ REQUIRED_CUDA_DLLS = (
 
 # На Windows нужно удерживать handle add_dll_directory, иначе путь может быть снят.
 DLL_DIR_HANDLES = []
+
+
+@dataclass
+class RunConfig:
+    source: str
+    is_url: bool
+    output_file: str = TRANSCRIPT_FILE
+    ffmpeg_path: str = DEFAULT_FFMPEG_PATH
+    language: str = DEFAULT_LANGUAGE
+    beam_size: int = DEFAULT_BEAM_SIZE
+    model_size: str = MODEL_SIZE
+    device_mode: Literal["auto", "cpu"] = "auto"
+    temp_audio_policy: Literal["ask", "keep", "delete"] = "ask"
 
 
 def register_nvidia_dll_dirs() -> List[Path]:
@@ -142,12 +157,17 @@ def prepare_audio_source(source: str, is_url: bool, ydl_opts: dict) -> str:
         return TEMP_AUDIO_FILE
 
     print("--- Скачиваю аудио из ВК... ---")
-    with YoutubeDL(ydl_opts) as ydl:
+    with YoutubeDL(cast(Any, ydl_opts)) as ydl:
         ydl.download([source])
     return TEMP_AUDIO_FILE
 
 
-def should_delete_temp_audio() -> bool:
+def should_delete_temp_audio(policy: Literal["ask", "keep", "delete"]) -> bool:
+    if policy == "delete":
+        return True
+    if policy == "keep":
+        return False
+
     if not sys.stdin or not sys.stdin.isatty():
         print(f"--- Неинтерактивный режим: временный файл сохранен ({TEMP_AUDIO_FILE}) ---")
         return False
@@ -156,7 +176,7 @@ def should_delete_temp_audio() -> bool:
     return answer in {"y", "yes", "д", "да"}
 
 
-def create_whisper_model(prefer_gpu: bool = True) -> Tuple[WhisperModel, str]:
+def create_whisper_model(model_size: str, prefer_gpu: bool = True) -> Tuple[WhisperModel, str]:
     print("--- Загружаю нейросеть... ---")
     LOCAL_MODEL_DIR.mkdir(parents=True, exist_ok=True)
     print(f"--- Локальный каталог модели: {LOCAL_MODEL_DIR} ---")
@@ -165,7 +185,7 @@ def create_whisper_model(prefer_gpu: bool = True) -> Tuple[WhisperModel, str]:
         for compute_type in GPU_COMPUTE_TYPES:
             try:
                 model = WhisperModel(
-                    MODEL_SIZE,
+                    model_size,
                     device="cuda",
                     compute_type=compute_type,
                     download_root=str(LOCAL_MODEL_DIR),
@@ -178,7 +198,7 @@ def create_whisper_model(prefer_gpu: bool = True) -> Tuple[WhisperModel, str]:
     print("--- Перехожу на CPU (compute_type=int8) ---")
     return (
         WhisperModel(
-            MODEL_SIZE,
+            model_size,
             device="cpu",
             compute_type="int8",
             download_root=str(LOCAL_MODEL_DIR),
@@ -199,7 +219,12 @@ def is_cuda_runtime_error(exc: Exception) -> bool:
     return any(marker in message for marker in markers)
 
 
-def collect_transcript_lines(model: WhisperModel, audio_filename: str) -> List[str]:
+def collect_transcript_lines(
+    model: WhisperModel,
+    audio_filename: str,
+    beam_size: int,
+    language: str,
+) -> List[str]:
     lines = []
     last_percent = -1
     total_duration = None
@@ -207,8 +232,8 @@ def collect_transcript_lines(model: WhisperModel, audio_filename: str) -> List[s
     # Стараемся взять длительность для вывода процента прогресса.
     segments, info = model.transcribe(
         audio_filename,
-        beam_size=DEFAULT_BEAM_SIZE,
-        language=DEFAULT_LANGUAGE,
+        beam_size=beam_size,
+        language=language,
     )
     total_duration = getattr(info, "duration", None) or getattr(info, "duration_after_vad", None)
 
@@ -233,48 +258,245 @@ def collect_transcript_lines(model: WhisperModel, audio_filename: str) -> List[s
     return lines
 
 
-def transcribe_with_fallback(audio_filename: str) -> Tuple[List[str], str]:
-    model, device = create_whisper_model(prefer_gpu=True)
+def transcribe_with_fallback(config: RunConfig, audio_filename: str) -> Tuple[List[str], str]:
+    model, device = create_whisper_model(
+        model_size=config.model_size,
+        prefer_gpu=config.device_mode == "auto",
+    )
 
     try:
-        return collect_transcript_lines(model, audio_filename), device
+        return (
+            collect_transcript_lines(
+                model,
+                audio_filename,
+                beam_size=config.beam_size,
+                language=config.language,
+            ),
+            device,
+        )
     except RuntimeError as exc:
         if device == "cuda" and is_cuda_runtime_error(exc):
             print(f"--- Ошибка CUDA во время распознавания: {exc} ---")
             print("--- Повторяю распознавание на CPU... ---")
-            cpu_model, _ = create_whisper_model(prefer_gpu=False)
-            return collect_transcript_lines(cpu_model, audio_filename), "cpu"
+            cpu_model, _ = create_whisper_model(model_size=config.model_size, prefer_gpu=False)
+            return (
+                collect_transcript_lines(
+                    cpu_model,
+                    audio_filename,
+                    beam_size=config.beam_size,
+                    language=config.language,
+                ),
+                "cpu",
+            )
         raise
 
-def transcribe_video(source, is_url=True):
-    ydl_opts = build_ydl_options(DEFAULT_FFMPEG_PATH)
-    audio_filename = prepare_audio_source(source, is_url, ydl_opts)
+
+def transcribe_video(config: RunConfig) -> None:
+    ydl_opts = build_ydl_options(config.ffmpeg_path)
+    audio_filename = prepare_audio_source(config.source, config.is_url, ydl_opts)
 
     try:
         print("--- Начинаю распознавание (это может занять время)... ---")
-        lines, used_device = transcribe_with_fallback(audio_filename)
+        lines, used_device = transcribe_with_fallback(config, audio_filename)
 
-        with open(TRANSCRIPT_FILE, "w", encoding="utf-8") as f:
+        with open(config.output_file, "w", encoding="utf-8") as f:
             for line in lines:
                 f.write(line)
 
-        print(f"\n--- Готово! Текст сохранен в {TRANSCRIPT_FILE} (device={used_device}) ---")
+        print(f"\n--- Готово! Текст сохранен в {config.output_file} (device={used_device}) ---")
     finally:
-        if is_url and os.path.exists(TEMP_AUDIO_FILE):
-            if should_delete_temp_audio():
+        if config.is_url and os.path.exists(TEMP_AUDIO_FILE):
+            if should_delete_temp_audio(config.temp_audio_policy):
                 os.remove(TEMP_AUDIO_FILE)
                 print(f"--- Временный файл удален: {TEMP_AUDIO_FILE} ---")
             else:
                 print(f"--- Временный файл сохранен: {TEMP_AUDIO_FILE} ---")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="VK/local audio transcription with faster-whisper")
+    source_group = parser.add_mutually_exclusive_group()
+    source_group.add_argument("--url", help="Видео URL для скачивания и транскрибации")
+    source_group.add_argument("--file", help="Локальный аудиофайл для транскрибации")
+
+    parser.add_argument("--ffmpeg-path", default=DEFAULT_FFMPEG_PATH, help="Путь к ffmpeg.exe")
+    parser.add_argument("--language", default=DEFAULT_LANGUAGE, help="Язык аудио (например ru, en)")
+    parser.add_argument("--beam-size", type=int, default=DEFAULT_BEAM_SIZE, help="Beam size")
+    parser.add_argument("--model-size", default=MODEL_SIZE, help="Размер модели Whisper")
+    parser.add_argument("--output", default=TRANSCRIPT_FILE, help="Выходной текстовый файл")
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cpu"),
+        default="auto",
+        help="Режим устройства: auto (GPU с fallback) или cpu",
+    )
+    parser.add_argument(
+        "--temp-audio",
+        choices=("ask", "keep", "delete"),
+        default="ask",
+        help="Поведение для temp_audio.mp3 после обработки URL",
+    )
+    parser.add_argument(
+        "--menu",
+        action="store_true",
+        help="Принудительно открыть интерактивное меню",
+    )
+    return parser.parse_args()
+
+
+def prompt_choice(title: str, choices: List[Tuple[str, str]]) -> str:
+    print(f"\n{title}")
+    for key, label in choices:
+        print(f"  {key}) {label}")
+
+    while True:
+        selected = input("Выберите пункт: ").strip()
+        if selected in {key for key, _ in choices}:
+            return selected
+        print("Некорректный выбор, попробуйте снова.")
+
+
+def prompt_with_default(label: str, default: str) -> str:
+    value = input(f"{label} [{default}]: ").strip()
+    return value if value else default
+
+
+def prompt_int_with_default(label: str, default: int, min_value: int = 1) -> int:
+    while True:
+        raw = input(f"{label} [{default}]: ").strip()
+        if not raw:
+            return default
+        try:
+            parsed = int(raw)
+            if parsed < min_value:
+                raise ValueError
+            return parsed
+        except ValueError:
+            print(f"Введите целое число >= {min_value}.")
+
+
+def run_interactive_menu() -> Optional[RunConfig]:
+    ffmpeg_path = DEFAULT_FFMPEG_PATH
+    language = DEFAULT_LANGUAGE
+    beam_size = DEFAULT_BEAM_SIZE
+    model_size = MODEL_SIZE
+    output_file = TRANSCRIPT_FILE
+    device_mode: Literal["auto", "cpu"] = "auto"
+    temp_audio_policy: Literal["ask", "keep", "delete"] = "ask"
+
+    while True:
+        print("\n=== Whisper Transcriber CLI ===")
+        print(f"Текущие настройки: lang={language}, beam={beam_size}, model={model_size}, device={device_mode}")
+        main_choice = prompt_choice(
+            "Главное меню",
+            [
+                ("1", "Транскрибировать видео по URL"),
+                ("2", "Транскрибировать локальный файл"),
+                ("3", "Настройки"),
+                ("4", "Диагностика CUDA DLL"),
+                ("0", "Выход"),
+            ],
+        )
+
+        if main_choice == "0":
+            return None
+
+        if main_choice == "4":
+            dirs = register_nvidia_dll_dirs()
+            diagnose_cuda_dlls(dirs)
+            continue
+
+        if main_choice == "3":
+            ffmpeg_path = prompt_with_default("Путь к ffmpeg.exe", ffmpeg_path)
+            language = prompt_with_default("Код языка", language)
+            beam_size = prompt_int_with_default("Beam size", beam_size)
+            model_size = prompt_with_default("Размер модели (tiny/base/small/medium/large-v3)", model_size)
+            output_file = prompt_with_default("Выходной файл", output_file)
+
+            device_choice = prompt_choice(
+                "Режим устройства",
+                [("1", "auto (GPU + fallback CPU)"), ("2", "cpu only")],
+            )
+            device_mode = "auto" if device_choice == "1" else "cpu"
+
+            temp_choice = prompt_choice(
+                "Что делать с temp_audio.mp3 после URL-режима",
+                [("1", "Спрашивать каждый раз"), ("2", "Всегда сохранять"), ("3", "Всегда удалять")],
+            )
+            temp_audio_policy = cast(Literal["ask", "keep", "delete"], {"1": "ask", "2": "keep", "3": "delete"}[temp_choice])
+            continue
+
+        if main_choice == "1":
+            source = input("Введите URL: ").strip()
+            if not source:
+                print("URL не может быть пустым.")
+                continue
+            return RunConfig(
+                source=source,
+                is_url=True,
+                output_file=output_file,
+                ffmpeg_path=ffmpeg_path,
+                language=language,
+                beam_size=beam_size,
+                model_size=model_size,
+                device_mode=device_mode,
+                temp_audio_policy=temp_audio_policy,
+            )
+
+        source = input("Введите путь к локальному аудиофайлу: ").strip()
+        if not source:
+            print("Путь не может быть пустым.")
+            continue
+        if not Path(source).exists():
+            print("Файл не найден.")
+            continue
+        return RunConfig(
+            source=source,
+            is_url=False,
+            output_file=output_file,
+            ffmpeg_path=ffmpeg_path,
+            language=language,
+            beam_size=beam_size,
+            model_size=model_size,
+            device_mode=device_mode,
+            temp_audio_policy=temp_audio_policy,
+        )
+
+
+def build_config_from_args(args: argparse.Namespace) -> Optional[RunConfig]:
+    if not args.url and not args.file:
+        return None
+    source = args.url if args.url else args.file
+    return RunConfig(
+        source=source,
+        is_url=bool(args.url),
+        output_file=args.output,
+        ffmpeg_path=args.ffmpeg_path,
+        language=args.language,
+        beam_size=args.beam_size,
+        model_size=args.model_size,
+        device_mode=args.device,
+        temp_audio_policy=args.temp_audio,
+    )
+
+
+def main() -> None:
+    args = parse_args()
+
+    config = build_config_from_args(args)
+    if args.menu or config is None:
+        config = run_interactive_menu()
+
+    if config is None:
+        print("Выход.")
+        return
+
+    if config.device_mode == "auto":
+        registered_dirs = register_nvidia_dll_dirs()
+        diagnose_cuda_dlls(registered_dirs)
+
+    transcribe_video(config)
+
+
 if __name__ == "__main__":
-    registered_dirs = register_nvidia_dll_dirs()
-    diagnose_cuda_dlls(registered_dirs)
-
-    video_input = "https://vkvideo.ru/video-46417318_456251310?list=ln-FiJzuZJwZtIMhgjAWi"
-
-    if video_input.startswith("http"):
-        transcribe_video(video_input, is_url=True)
-    else:
-        transcribe_video(video_input, is_url=False)
+    main()
