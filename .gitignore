@@ -12,6 +12,7 @@ cuda_dll/
 
 # Runtime outputs
 temp_audio.*
+user_settings.json
 transcript_old.txt
 
 # OS / IDE

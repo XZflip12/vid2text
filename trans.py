@@ -1,5 +1,6 @@
 import argparse
 import ctypes
+import json
 import os
 import sys
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ GPU_COMPUTE_TYPES = ("float16", "int8_float16", "int8")
 PROJECT_ROOT = Path(__file__).resolve().parent
 LOCAL_MODEL_DIR = PROJECT_ROOT / "models"
 LOCAL_CUDA_DLL_DIR = PROJECT_ROOT / "cuda_dll"
+USER_SETTINGS_FILE = PROJECT_ROOT / "user_settings.json"
 REQUIRED_CUDA_DLLS = (
     "cublas64_12.dll",
     "cublasLt64_12.dll",
@@ -42,6 +44,70 @@ class RunConfig:
     model_size: str = MODEL_SIZE
     device_mode: Literal["auto", "cpu"] = "auto"
     temp_audio_policy: Literal["ask", "keep", "delete"] = "ask"
+
+
+def default_user_settings() -> dict[str, Any]:
+    return {
+        "ffmpeg_path": DEFAULT_FFMPEG_PATH,
+        "language": DEFAULT_LANGUAGE,
+        "beam_size": DEFAULT_BEAM_SIZE,
+        "model_size": MODEL_SIZE,
+        "output_file": TRANSCRIPT_FILE,
+        "device_mode": "auto",
+        "temp_audio_policy": "ask",
+    }
+
+
+def sanitize_user_settings(raw: Any) -> dict[str, Any]:
+    settings = default_user_settings()
+    if not isinstance(raw, dict):
+        return settings
+
+    if isinstance(raw.get("ffmpeg_path"), str) and raw["ffmpeg_path"].strip():
+        settings["ffmpeg_path"] = raw["ffmpeg_path"].strip()
+    if isinstance(raw.get("language"), str) and raw["language"].strip():
+        settings["language"] = raw["language"].strip()
+    if isinstance(raw.get("model_size"), str) and raw["model_size"].strip():
+        settings["model_size"] = raw["model_size"].strip()
+    if isinstance(raw.get("output_file"), str) and raw["output_file"].strip():
+        settings["output_file"] = raw["output_file"].strip()
+
+    beam_size = raw.get("beam_size")
+    if isinstance(beam_size, int) and beam_size >= 1:
+        settings["beam_size"] = beam_size
+
+    device_mode = raw.get("device_mode")
+    if device_mode in {"auto", "cpu"}:
+        settings["device_mode"] = device_mode
+
+    temp_audio_policy = raw.get("temp_audio_policy")
+    if temp_audio_policy in {"ask", "keep", "delete"}:
+        settings["temp_audio_policy"] = temp_audio_policy
+
+    return settings
+
+
+def load_user_settings() -> dict[str, Any]:
+    if not USER_SETTINGS_FILE.exists():
+        return default_user_settings()
+
+    try:
+        with open(USER_SETTINGS_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return sanitize_user_settings(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"--- Failed to load {USER_SETTINGS_FILE.name}, using defaults: {exc} ---")
+        return default_user_settings()
+
+
+def save_user_settings(settings: dict[str, Any]) -> None:
+    safe_settings = sanitize_user_settings(settings)
+    try:
+        with open(USER_SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(safe_settings, f, ensure_ascii=True, indent=2)
+        print(f"--- Settings saved to {USER_SETTINGS_FILE.name} ---")
+    except OSError as exc:
+        print(f"--- Failed to save settings: {exc} ---")
 
 
 def register_nvidia_dll_dirs() -> List[Path]:
@@ -313,27 +379,27 @@ def transcribe_video(config: RunConfig) -> None:
                 print(f"--- Temporary file kept: {TEMP_AUDIO_FILE} ---")
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(settings: dict[str, Any]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="URL/local audio transcription powered by yt-dlp and faster-whisper")
     source_group = parser.add_mutually_exclusive_group()
     source_group.add_argument("--url", help="Source URL to download and transcribe")
     source_group.add_argument("--file", help="Local audio file to transcribe")
 
-    parser.add_argument("--ffmpeg-path", default=DEFAULT_FFMPEG_PATH, help="Path to ffmpeg.exe")
-    parser.add_argument("--language", default=DEFAULT_LANGUAGE, help="Audio language code (e.g. ru, en)")
-    parser.add_argument("--beam-size", type=int, default=DEFAULT_BEAM_SIZE, help="Beam size")
-    parser.add_argument("--model-size", default=MODEL_SIZE, help="Whisper model size")
-    parser.add_argument("--output", default=TRANSCRIPT_FILE, help="Output transcript file")
+    parser.add_argument("--ffmpeg-path", default=settings["ffmpeg_path"], help="Path to ffmpeg.exe")
+    parser.add_argument("--language", default=settings["language"], help="Audio language code (e.g. ru, en)")
+    parser.add_argument("--beam-size", type=int, default=settings["beam_size"], help="Beam size")
+    parser.add_argument("--model-size", default=settings["model_size"], help="Whisper model size")
+    parser.add_argument("--output", default=settings["output_file"], help="Output transcript file")
     parser.add_argument(
         "--device",
         choices=("auto", "cpu"),
-        default="auto",
+        default=settings["device_mode"],
         help="Device mode: auto (GPU with CPU fallback) or cpu",
     )
     parser.add_argument(
         "--temp-audio",
         choices=("ask", "keep", "delete"),
-        default="ask",
+        default=settings["temp_audio_policy"],
         help="What to do with temp_audio.mp3 after URL processing",
     )
     parser.add_argument(
@@ -375,14 +441,16 @@ def prompt_int_with_default(label: str, default: int, min_value: int = 1) -> int
             print(f"Enter an integer >= {min_value}.")
 
 
-def run_interactive_menu() -> Optional[RunConfig]:
-    ffmpeg_path = DEFAULT_FFMPEG_PATH
-    language = DEFAULT_LANGUAGE
-    beam_size = DEFAULT_BEAM_SIZE
-    model_size = MODEL_SIZE
-    output_file = TRANSCRIPT_FILE
-    device_mode: Literal["auto", "cpu"] = "auto"
-    temp_audio_policy: Literal["ask", "keep", "delete"] = "ask"
+def run_interactive_menu(settings: dict[str, Any]) -> Optional[RunConfig]:
+    ffmpeg_path: str = settings["ffmpeg_path"]
+    language: str = settings["language"]
+    beam_size: int = settings["beam_size"]
+    model_size: str = settings["model_size"]
+    output_file: str = settings["output_file"]
+    device_mode: Literal["auto", "cpu"] = cast(Literal["auto", "cpu"], settings["device_mode"])
+    temp_audio_policy: Literal["ask", "keep", "delete"] = cast(
+        Literal["ask", "keep", "delete"], settings["temp_audio_policy"]
+    )
 
     while True:
         print("\n=== Whisper Transcriber CLI ===")
@@ -424,6 +492,18 @@ def run_interactive_menu() -> Optional[RunConfig]:
                 [("1", "Ask every time"), ("2", "Always keep"), ("3", "Always delete")],
             )
             temp_audio_policy = cast(Literal["ask", "keep", "delete"], {"1": "ask", "2": "keep", "3": "delete"}[temp_choice])
+            settings.update(
+                {
+                    "ffmpeg_path": ffmpeg_path,
+                    "language": language,
+                    "beam_size": beam_size,
+                    "model_size": model_size,
+                    "output_file": output_file,
+                    "device_mode": device_mode,
+                    "temp_audio_policy": temp_audio_policy,
+                }
+            )
+            save_user_settings(settings)
             continue
 
         if main_choice == "1":
@@ -481,11 +561,25 @@ def build_config_from_args(args: argparse.Namespace) -> Optional[RunConfig]:
 
 
 def main() -> None:
-    args = parse_args()
+    settings = load_user_settings()
+    args = parse_args(settings)
+
+    settings.update(
+        {
+            "ffmpeg_path": args.ffmpeg_path,
+            "language": args.language,
+            "beam_size": args.beam_size,
+            "model_size": args.model_size,
+            "output_file": args.output,
+            "device_mode": args.device,
+            "temp_audio_policy": args.temp_audio,
+        }
+    )
+    save_user_settings(settings)
 
     config = build_config_from_args(args)
     if args.menu or config is None:
-        config = run_interactive_menu()
+        config = run_interactive_menu(settings)
 
     if config is None:
         print("Exit.")
