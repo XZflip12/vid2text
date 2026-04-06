@@ -10,11 +10,12 @@ The project supports GPU acceleration on Windows (CUDA), with automatic fallback
 
 ## Project Structure
 
-- `trans.py` — main script.
-- `models/` — local Whisper model cache (ignored by git).
-- `cuda_dll/` — optional local CUDA DLL directory (ignored by git).
-- `temp_audio.mp3` — temporary downloaded audio (kept or removed by your choice).
-- `transcript_old.txt` — transcription output.
+- `main.py` - main script.
+- `app/` - program modules.
+- `models/` - local Whisper model cache (ignored by git).
+- `cuda_dll/` - optional local CUDA DLL directory (ignored by git).
+- `tempaudio.mp3` - temporary downloaded audio (kept or removed by your choice).
+- `transcriptold.txt` - transcription output.
 
 ## Requirements
 
@@ -41,14 +42,15 @@ Install required packages:
 
 ```powershell
 python -m pip install --upgrade pip
-python -m pip install faster-whisper yt-dlp
+pip install -r requirements.txt
 ```
 
-Set FFmpeg path in `trans.py` (constant `DEFAULT_FFMPEG_PATH`).
+Set FFmpeg path in `main.py` (constant `DEFAULT_FFMPEG_PATH`).
 
 ## 2) Optional CUDA Setup (skip this for CPU mode)
 
 If you want GPU mode, prepare CUDA runtime DLLs.
+If they are not installed from requirements.txt:
 
 ### Option A: Use pip NVIDIA runtime packages inside `.venv`
 
@@ -81,24 +83,17 @@ Set `DEFAULT_FFMPEG_PATH` in `trans.py` if needed, or pass `--ffmpeg-path` at ru
 python .\trans.py
 ```
 
-Or run directly with arguments:
-
-```powershell
-python .\trans.py --url "https://example.com/video" --device auto --temp-audio ask
-python .\trans.py --file ".\my_audio.mp3" --device cpu
-```
-
 At runtime, the script will:
 
 - Try GPU with several compute types.
 - Fall back to CPU automatically on CUDA runtime errors.
 - Print transcription progress in the console.
-- Ask whether to delete `temp_audio.mp3` after completion.
-- Reuse existing `temp_audio.mp3` on next run (if it was kept).
+- Ask whether to delete `tempaudio.mp3` after completion.
+- Reuse existing `tempaudio.mp3` on next run (if it was kept).
 
 ## Output
 
-- Main output file: `transcript_old.txt`
+- Main output file: `transcriptold.txt`
 - Format per line: `[start -> end] text`
 
 ## Troubleshooting
