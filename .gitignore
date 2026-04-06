@@ -15,6 +15,9 @@ temp_audio.*
 user_settings.json
 transcript_old.txt
 
+# ffmpeg ignore
+ffmpeg.exe
+
 # OS / IDE
 .DS_Store
 Thumbs.db
