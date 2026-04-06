@@ -1,8 +1,8 @@
-# VK Video Transcription (faster-whisper)
+# URL Audio Transcription (yt-dlp + faster-whisper)
 
 A small Python script to:
 
-1. Download audio from a VK video URL (or use a local audio file).
+1. Download audio from a supported URL via `yt-dlp` (or use a local audio file).
 2. Transcribe speech to text with `faster-whisper`.
 3. Save the transcript with timestamps to `transcript.txt`.
 
@@ -14,7 +14,7 @@ The project supports GPU acceleration on Windows (CUDA), with automatic fallback
 - `models/` — local Whisper model cache (ignored by git).
 - `cuda_dll/` — optional local CUDA DLL directory (ignored by git).
 - `temp_audio.mp3` — temporary downloaded audio (kept or removed by your choice).
-- `transcript.txt` — transcription output.
+- `transcript_old.txt` — transcription output.
 
 ## Requirements
 
@@ -72,15 +72,20 @@ The script automatically registers these directories at startup and prints diagn
 
 ## 3) Configure Input
 
-In `trans.py`, set:
-
-- `video_input` to your VK URL (or local file path).
-- `DEFAULT_FFMPEG_PATH` to your local `ffmpeg.exe` path.
+Use either interactive menu mode or CLI arguments (URL/local file).
+Set `DEFAULT_FFMPEG_PATH` in `trans.py` if needed, or pass `--ffmpeg-path` at runtime.
 
 ## 4) Run
 
 ```powershell
 python .\trans.py
+```
+
+Or run directly with arguments:
+
+```powershell
+python .\trans.py --url "https://example.com/video" --device auto --temp-audio ask
+python .\trans.py --file ".\my_audio.mp3" --device cpu
 ```
 
 At runtime, the script will:
@@ -93,7 +98,7 @@ At runtime, the script will:
 
 ## Output
 
-- Main output file: `transcript.txt`
+- Main output file: `transcript_old.txt`
 - Format per line: `[start -> end] text`
 
 ## Troubleshooting

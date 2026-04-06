@@ -12,7 +12,7 @@ cuda_dll/
 
 # Runtime outputs
 temp_audio.*
-transcript.txt
+transcript_old.txt
 
 # OS / IDE
 .DS_Store
