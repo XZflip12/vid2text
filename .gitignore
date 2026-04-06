@@ -9,11 +9,14 @@ __pycache__/
 # Local model and CUDA runtime artifacts
 models/
 cuda_dll/
+cudadll/
 
 # Runtime outputs
 temp_audio.*
-user_settings.json
-transcript_old.txt
+*.mp3
+usersettings.json
+*.txt
+!requirements.txt
 
 # ffmpeg ignore
 ffmpeg.exe
