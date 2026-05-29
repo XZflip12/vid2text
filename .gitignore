@@ -11,12 +11,12 @@ models/
 cuda_dll/
 
 # Runtime outputs
-temp_audio.*
-user_settings.json
-transcript_old.txt
+*.mp3
+*.mp4
+*.json
+*.txt
 
 # OS / IDE
 .DS_Store
 Thumbs.db
 .idea/
-
