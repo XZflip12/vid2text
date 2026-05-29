@@ -1,122 +1,89 @@
-# URL Audio Transcription (yt-dlp + faster-whisper)
+Here is the updated `README.md` for your new modular architecture.
 
-A small Python script to:
+---
 
-1. Download audio from a supported URL via `yt-dlp` (or use a local audio file).
-2. Transcribe speech to text with `faster-whisper`.
-3. Save the transcript with timestamps to `transcript.txt`.
+# URL Audio Transcription (Modular Architecture)
 
-The project supports GPU acceleration on Windows (CUDA), with automatic fallback to CPU if GPU runtime loading fails.
+A robust Python tool to transcribe audio to text using `faster-whisper`. It features a modular architecture, persistent JSON settings, real-time transcription saving to prevent data loss, and automatic GPU/CPU fallback.
 
 ## Project Structure
 
-- `trans.py` — main script.
-- `models/` — local Whisper model cache (ignored by git).
-- `cuda_dll/` — optional local CUDA DLL directory (ignored by git).
-- `temp_audio.mp3` — temporary downloaded audio (kept or removed by your choice).
-- `transcript_old.txt` — transcription output.
+The project is organized into logical modules for better maintainability:
+
+```text
+project_root/
+├── app.py              # Main entry point and CLI menu
+├── settings.json       # Persistent user configuration
+├── modules/
+│   ├── __init__.py
+│   ├── settings.py     # Settings management (JSON handling)
+│   ├── downloader.py   # yt-dlp integration and file management
+│   └── transcriber.py  # Faster-whisper logic and CUDA diagnostics
+├── models/             # Local Whisper model cache
+└── cuda_dll/           # Optional local CUDA DLL directory
+```
 
 ## Requirements
 
-- Windows (current script paths are Windows-oriented).
-- Python 3.
-- FFmpeg installed.
-- Internet access for downloading video/audio and model files (first run).
+* **Windows** (Optimized for Windows path handling).
+* **Python 3.10+**.
+* **FFmpeg** installed (provide the path in settings).
+* **Internet access** (for model download and video fetching).
 
-Python packages:
+## Installation
 
-- `faster-whisper`
-- `yt-dlp`
-
-## 1) Setup (CPU-first, minimal)
-
-Create and activate a virtual environment:
+1. **Clone/Download** the repository.
+2. **Create and activate a virtual environment:**
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-Install required packages:
+3. **Install dependencies:**
 
 ```powershell
 python -m pip install --upgrade pip
 python -m pip install faster-whisper yt-dlp
 ```
 
-Set FFmpeg path in `trans.py` (constant `DEFAULT_FFMPEG_PATH`).
-
-## 2) Optional CUDA Setup (skip this for CPU mode)
-
-If you want GPU mode, prepare CUDA runtime DLLs.
-
-### Option A: Use pip NVIDIA runtime packages inside `.venv`
+4. **Optional CUDA (GPU) Setup:**
+To enable GPU acceleration, install the necessary NVIDIA runtime packages within your virtual environment:
 
 ```powershell
-python -m pip install nvidia-cublas-cu12
-python -m pip install nvidia-cudnn-cu12
-python -m pip install nvidia-cuda-runtime-cu12
-python -m pip install nvidia-cuda-nvrtc-cu12
+python -m pip install nvidia-cublas-cu12 nvidia-cudnn-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-nvrtc-cu12
 ```
 
-### Option B: Put DLLs manually into project folder
+## Usage
 
-Copy required DLL files into `cuda_dll/` (or `cuda_dll/bin`):
-
-- `cublas64_12.dll`
-- `cublasLt64_12.dll`
-- `cudnn64_9.dll`
-- `cudart64_12.dll`
-
-The script automatically registers these directories at startup and prints diagnostics.
-
-## 3) Configure Input
-
-Use either interactive menu mode or CLI arguments (URL/local file).
-Set `DEFAULT_FFMPEG_PATH` in `trans.py` if needed, or pass `--ffmpeg-path` at runtime.
-
-## 4) Run
+Start the application by running:
 
 ```powershell
-python .\trans.py
+python app.py
 ```
 
-Or run directly with arguments:
+### Features
 
-```powershell
-python .\trans.py --url "https://example.com/video" --device auto --temp-audio ask
-python .\trans.py --file ".\my_audio.mp3" --device cpu
-```
+* **Modular Architecture:** Easy to extend or modify.
+* **JSON Settings:** Your preferences (FFmpeg path, model size, language, etc.) are saved automatically in `settings.json`.
+* **Real-time Saving:** The transcript is written to disk segment-by-segment as it is processed, protecting your work against crashes.
+* **Interactive CLI:** An intuitive menu to switch between URL or local file processing and diagnostic tools.
+* **CUDA Resilience:** Automatic registration of DLL directories and fallback to CPU if GPU initialization fails.
 
-At runtime, the script will:
+## Diagnostics & Troubleshooting
 
-- Try GPU with several compute types.
-- Fall back to CPU automatically on CUDA runtime errors.
-- Print transcription progress in the console.
-- Ask whether to delete `temp_audio.mp3` after completion.
-- Reuse existing `temp_audio.mp3` on next run (if it was kept).
+If you encounter issues with GPU acceleration:
+
+1. Use the **"Диагностика CUDA DLL"** option (Option 4) in the main menu. This will verify if the required DLLs are found by the system.
+2. Ensure you have the correct NVIDIA drivers installed.
+3. If `cublas64_12.dll` or similar files are reported as missing, you can manually place them in the `cuda_dll/` folder, and the script will automatically include them in the search path.
 
 ## Output
 
-- Main output file: `transcript_old.txt`
-- Format per line: `[start -> end] text`
-
-## Troubleshooting
-
-### `cublas64_12.dll is not found or cannot be loaded`
-
-1. Make sure `cu12` runtime files are available (especially `cudart64_12.dll`).
-2. Check startup logs from `register_nvidia_dll_dirs()` and `diagnose_cuda_dlls()`.
-3. Verify DLLs exist in `.venv\Lib\site-packages\nvidia\...\bin` or in `cuda_dll/`.
-
-### GPU is still not used
-
-- Confirm your NVIDIA driver is installed and compatible.
-- Keep CUDA setup versions consistent (the script currently expects `cu12`-style DLL names).
-- If needed, run CPU mode (CUDA setup can be skipped).
+* **Transcripts:** Saved as text files (default `transcript_old.txt`).
+* **Format:** `[start_time -> end_time] transcribed text`
 
 ## Notes
 
-- `models/` and `cuda_dll/` are intentionally excluded from git via `.gitignore`.
-- Current script is single-file and intended for local usage.
-
+* `models/`, `cuda_dll/`, `settings.json`, and `__pycache__/` are automatically handled and usually ignored by Git.
+* The `app.py` script includes a forced exit mechanism (`os._exit(0)`) to cleanly bypass common CTranslate2 memory cleanup issues on Windows.
