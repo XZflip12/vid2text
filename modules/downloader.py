@@ -3,6 +3,11 @@ import sys
 from typing import Any, cast, Literal
 from yt_dlp import YoutubeDL
 from modules.settings import TEMP_AUDIO_TEMPLATE, TEMP_AUDIO_FILE
+from modules.localizer import Localizer
+
+
+localizer = Localizer()
+
 
 def build_ydl_options(ffmpeg_path: str) -> dict:
     return {
@@ -23,10 +28,10 @@ def prepare_audio_source(source: str, is_url: bool, ffmpeg_path: str) -> str:
         return source
 
     if os.path.exists(TEMP_AUDIO_FILE):
-        print(f"--- Найден {TEMP_AUDIO_FILE}, использую его без повторного скачивания. ---")
+        print(localizer.get_string('temp_found', TEMP_AUDIO_FILE))
         return TEMP_AUDIO_FILE
 
-    print("--- Скачиваю аудио... ---")
+    print(localizer.get_string('downloading_audio'))
     ydl_opts = build_ydl_options(ffmpeg_path)
     with YoutubeDL(cast(Any, ydl_opts)) as ydl:
         ydl.download([source])
@@ -41,16 +46,16 @@ def handle_temp_audio_cleanup(is_url: bool, policy: Literal["ask", "keep", "dele
         should_delete = True
     elif policy == "ask":
         if sys.stdin and sys.stdin.isatty():
-            answer = input(f"Удалить временный файл {TEMP_AUDIO_FILE}? [y/N]: ").strip().lower()
+            answer = input(localizer.get_string('clean_ask', TEMP_AUDIO_FILE)).strip().lower()
             should_delete = answer in {"y", "yes", "д", "да"}
         else:
-            print("--- Неинтерактивный режим: временный файл сохранен ---")
+            print(localizer.get_string('clean_non_interactive'))
 
     if should_delete:
         try:
             os.remove(TEMP_AUDIO_FILE)
-            print(f"--- Временный файл удален: {TEMP_AUDIO_FILE} ---")
+            print(localizer.get_string('temp_deleted', TEMP_AUDIO_FILE))
         except OSError:
             pass
     else:
-        print(f"--- Временный файл сохранен: {TEMP_AUDIO_FILE} ---")
+        print(localizer.get_string('temp_saved', TEMP_AUDIO_FILE))

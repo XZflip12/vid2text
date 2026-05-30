@@ -6,10 +6,13 @@ from typing import List, Tuple
 from faster_whisper import WhisperModel
 
 from modules.settings import LOCAL_CUDA_DLL_DIR, LOCAL_MODEL_DIR, AppConfig
+from modules.localizer import Localizer
 
 GPU_COMPUTE_TYPES = ("float16", "int8_float16", "int8")
 REQUIRED_CUDA_DLLS = ("cublas64_12.dll", "cublasLt64_12.dll", "cudnn64_9.dll", "cudart64_12.dll")
 DLL_DIR_HANDLES = []
+localizer = Localizer()
+
 
 def register_nvidia_dll_dirs() -> List[Path]:
     if sys.platform != "win32":
@@ -40,7 +43,8 @@ def register_nvidia_dll_dirs() -> List[Path]:
             DLL_DIR_HANDLES.append(os.add_dll_directory(str(dll_dir)))
             os.environ["PATH"] = f"{dll_dir}{os.pathsep}" + os.environ.get("PATH", "")
             registered_dirs.append(dll_dir)
-            print(f"--- DLL-путь добавлен: {dll_dir} ---")
+
+            print(localizer.get_string('dll_path_added', dll_dir))
         except OSError:
             pass
     return registered_dirs
@@ -49,7 +53,7 @@ def diagnose_cuda_dlls() -> None:
     if sys.platform != "win32":
         return
     dirs = register_nvidia_dll_dirs()
-    print("--- Диагностика CUDA DLL ---")
+    print(localizer.get_string('choice_diagnostics'))
     missing = []
     for dll_name in REQUIRED_CUDA_DLLS:
         found = False
@@ -68,7 +72,7 @@ def diagnose_cuda_dlls() -> None:
             print(f"[MISSING] {dll_name}")
 
     if missing:
-        print("--- Не хватает DLL для CUDA. Проверьте папку cuda_dll. ---")
+        print(localizer.get_string('missing_cuda_dlls'))
 
 def create_whisper_model(model_size: str, prefer_gpu: bool = True) -> Tuple[WhisperModel, str]:
     LOCAL_MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -76,12 +80,12 @@ def create_whisper_model(model_size: str, prefer_gpu: bool = True) -> Tuple[Whis
         for compute_type in GPU_COMPUTE_TYPES:
             try:
                 model = WhisperModel(model_size, device="cuda", compute_type=compute_type, download_root=str(LOCAL_MODEL_DIR))
-                print(f"--- Запуск на GPU: compute_type={compute_type} ---")
+                print(localizer.get_string('gpu_launch', compute_type))
                 return model, "cuda"
             except Exception as exc:
-                print(f"--- CUDA не инициализирована для {compute_type}: {exc} ---")
-    
-    print("--- Перехожу на CPU (compute_type=int8) ---")
+                print(localizer.get_string('error_cuda_init', compute_type, exc))
+
+    print(localizer.get_string('cpu_fallback_notice'))
     return WhisperModel(model_size, device="cpu", compute_type="int8", download_root=str(LOCAL_MODEL_DIR)), "cpu"
 
 def is_cuda_runtime_error(exc: Exception) -> bool:
@@ -93,7 +97,6 @@ def collect_transcript_lines(model: WhisperModel, audio_filename: str, config: A
     segments, info = model.transcribe(audio_filename, beam_size=config.beam_size, language=config.language, vad_filter=True)
     total_duration = getattr(info, "duration", None) or getattr(info, "duration_after_vad", None)
 
-    # Запись в реальном времени, чтобы избежать потери данных при краше CTranslate2 на Windows
     with open(config.output_file, "w", encoding="utf-8") as f:
         for idx, segment in enumerate(segments, start=1):
             line = f"[{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text}\n"
@@ -104,11 +107,11 @@ def collect_transcript_lines(model: WhisperModel, audio_filename: str, config: A
             if total_duration and total_duration > 0:
                 percent = min(100, int((segment.end / total_duration) * 100))
                 if percent != last_percent:
-                    print(f"\r--- Транскрибация: {percent:3d}% ({segment.end:.1f}/{total_duration:.1f}s) ---", end="")
+                    print(localizer.get_string('progress_bar', percent, segment.end, total_duration), end='')
                     last_percent = percent
             else:
-                print(f"\r--- Обработан сегмент: {idx} ---", end="")
-    print("\n--- Транскрибация завершена ---")
+                print(localizer.get_string('segment_processed', idx), end='')
+    print(localizer.get_string('transcription_finished'))
 
 def transcribe_with_fallback(audio_filename: str, config: AppConfig) -> str:
     model, device = create_whisper_model(config.model_size, prefer_gpu=config.device_mode == "auto")
@@ -117,7 +120,7 @@ def transcribe_with_fallback(audio_filename: str, config: AppConfig) -> str:
         return device
     except RuntimeError as exc:
         if device == "cuda" and is_cuda_runtime_error(exc):
-            print(f"\n--- Ошибка CUDA: {exc}. Повторяю на CPU... ---")
+            print(localizer.get_string('error_cuda_runtime', exc))
             cpu_model, _ = create_whisper_model(config.model_size, prefer_gpu=False)
             collect_transcript_lines(cpu_model, audio_filename, config)
             return "cpu"

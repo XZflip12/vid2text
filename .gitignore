@@ -13,8 +13,10 @@ cuda_dll/
 # Runtime outputs
 *.mp3
 *.mp4
-*.json
 *.txt
+
+ffmpeg.exe
+settings.json
 
 # OS / IDE
 .DS_Store
