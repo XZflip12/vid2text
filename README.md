@@ -1,7 +1,3 @@
-Here is the updated `README.md` for your new modular architecture.
-
----
-
 # URL Audio Transcription (Modular Architecture)
 
 A robust Python tool to transcribe audio to text using `faster-whisper`. It features a modular architecture, persistent JSON settings, real-time transcription saving to prevent data loss, and automatic GPU/CPU fallback.
